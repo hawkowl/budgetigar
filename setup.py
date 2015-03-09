@@ -7,7 +7,8 @@ setup(
     install_requires=[
         'Click',
         'axiom',
-        'ofxparse'
+        'ofxparse',
+        'attrs'
     ],
     entry_points='''
         [console_scripts]
