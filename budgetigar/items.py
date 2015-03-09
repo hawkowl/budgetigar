@@ -18,11 +18,13 @@ class Account(item.Item):
     accountName = attributes.text()
 
 @attr.s(these={"account": attr.ib(),
+               "uuid": attr.ib(),
                "transactionID": attr.ib(),
                "transactionType": attr.ib(),
                "date": attr.ib(),
                "_amount": attr.ib(),
-               "_memo": attr.ib()
+               "_memo": attr.ib(),
+               "related_transaction": attr.ib()
            },
         cmp=False, hash=False, init=False)
 class Transaction(item.Item):

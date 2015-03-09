@@ -20,13 +20,18 @@ store = None
 @click.group()
 @click.argument("db", required=True)
 def cli(db):
+    """
+    A budget and money tracking tool.
+    """
     global store
     store = Store(db)
 
 
 @cli.command()
 def info():
-
+    """
+    Display some info about the database.
+    """
     lenAccounts = store.query(Account).count()
     transactions = list(store.query(Transaction))
 
@@ -34,18 +39,21 @@ def info():
     credit = 0
 
     for t in transactions:
-        if t.transactionType == "credit":
-            credit += t.amount
-        else:
-            debit -= t.amount
+        if not t.related_transaction:
+            if t.transactionType == "credit":
+                credit += t.amount
+            else:
+                debit -= t.amount
 
     click.echo("There are {} accounts with {} transactions.".format(lenAccounts, len(transactions)))
-    click.echo("There has been ${:2f} of debits and ${:2f} of credits.".format(debit, credit))
+    click.echo("There has been ${:2f} of debits and ${:2f} of credits (external).".format(debit, credit))
 
 
 @cli.command()
 def dumptransactions():
-
+    """
+    Dump all the transactions.
+    """
     transactions = list(store.query(Transaction))
 
     for x in transactions:
@@ -99,7 +107,9 @@ def associate():
 @cli.command()
 @click.argument('f', type=click.File('r'))
 def load(f):
-
+    """
+    Load in an OFX data file.
+    """
     click.echo("Going to load {}...".format(f.name))
 
     ofx = OfxParser.parse(f)
