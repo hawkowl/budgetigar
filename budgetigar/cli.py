@@ -28,9 +28,19 @@ def cli(db):
 def info():
 
     lenAccounts = store.query(Account).count()
-    lenTransactions = store.query(Transaction).count()
+    transactions = list(store.query(Transaction))
 
-    click.echo("There are {} accounts with {} transactions.".format(lenAccounts, lenTransactions))
+    debit = 0
+    credit = 0
+
+    for t in transactions:
+        if t.transactionType == "credit":
+            credit += t.amount
+        else:
+            debit -= t.amount
+
+    click.echo("There are {} accounts with {} transactions.".format(lenAccounts, len(transactions)))
+    click.echo("There has been ${:2f} of debits and ${:2f} of credits.".format(debit, credit))
 
 
 @cli.command()
@@ -40,6 +50,51 @@ def dumptransactions():
 
     for x in transactions:
         print x
+
+@cli.command()
+def associate():
+    """
+    Associate transactions automatically.
+    """
+    _transactions = store.query(Transaction,
+                                Transaction.related_transaction == None)
+
+    possibleMatchesCount = 0
+
+    with click.progressbar(_transactions, _transactions.count()) as transactions:
+        for t in transactions:
+
+            if not t.related_transaction:
+
+                possibleMatches = store.query(Transaction,
+                                              attributes.AND(
+                                                  Transaction.amount == -t.amount,
+                                                  Transaction.account != t.account,
+                                                  Transaction.transactionID == t.transactionID,
+                                                  Transaction.related_transaction == None
+                                              )
+                                          )
+
+                if possibleMatches.count() == 1:
+                    possibleMatchesCount += 1
+
+                    match = list(possibleMatches)[0]
+
+                    t.related_transaction = match.uuid
+                    match.related_transaction = t.uuid
+
+
+                elif possibleMatches.count() == 0:
+                    pass
+
+                else:
+                    assert False
+
+
+    click.echo("Associated {} matches.".format(possibleMatchesCount))
+
+
+
 
 @cli.command()
 @click.argument('f', type=click.File('r'))
@@ -52,8 +107,6 @@ def load(f):
     click.echo("Found {} accounts.".format(len(ofx.accounts)))
 
     for account in ofx.accounts:
-
-        click.echo("====")
         click.echo("Starting on {} account {} {}...".format(account.account_type.lower(),
                                                             account.routing_number,
                                                             account.account_id))
@@ -92,7 +145,8 @@ def load(f):
 
                 if t.id == "":
                     # Hack for working around Commbank's lack of IDs sometimes
-                    t.id = unicode("HACKFIX" + hashlib.sha224(str(Time.fromDatetime(t.date).asPOSIXTimestamp) + str(t.amount) + t.memo).hexdigest())
+                    t.id = unicode("HACKFIX" + hashlib.sha224(
+                        str(Time.fromDatetime(t.date).asPOSIXTimestamp) + str(t.amount) + t.memo).hexdigest())
 
 
                 foundTransactions = list(store.query(Transaction,
@@ -105,6 +159,7 @@ def load(f):
                 if len(foundTransactions) == 0:
 
                     storedTransaction = Transaction(store=store,
+                                                    uuid=str(uuid.uuid4()),
                                                     account=storedAccount.uuid,
                                                     transactionID=t.id,
                                                     transactionType=t.type,

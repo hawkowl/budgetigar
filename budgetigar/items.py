@@ -29,6 +29,9 @@ class Transaction(item.Item):
     """
     A transaction.
     """
+    # Our UUID
+    uuid = attributes.bytes(allowNone=False)
+
     # To link to an account
     account = attributes.bytes(allowNone=False)
 
@@ -40,6 +43,8 @@ class Transaction(item.Item):
 
     amount = attributes.money(allowNone=False)
     memo = attributes.text()
+
+    related_transaction = attributes.bytes()
 
 
     @property
