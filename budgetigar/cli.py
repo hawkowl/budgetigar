@@ -114,7 +114,6 @@ def load(f):
                     modifiedCount = modifiedCount + 1
 
                 elif len(foundTransactions) == 1:
-                    click.echo(t.memo)
                     pass
                     # skip
                 else:
