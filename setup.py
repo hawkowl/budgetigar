@@ -6,7 +6,8 @@ setup(
     py_modules=['budgetigar'],
     install_requires=[
         'Click',
-        'axiom'
+        'axiom',
+        'ofxparse'
     ],
     entry_points='''
         [console_scripts]
