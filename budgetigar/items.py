@@ -60,3 +60,40 @@ class Transaction(item.Item):
     @property
     def _memo(self):
         return " ".join(self.memo.split())
+
+
+class Budget(item.Item):
+    """
+    A budget (eg. "car insurance")
+    """
+    # Our UUID
+    uuid = attributes.bytes(allowNone=False)
+
+    name = attributes.text(allowNone=False)
+
+    # When it first kicks in.
+    startDate = attributes.timestamp(allowNone=False)
+
+    # How much it should do by default
+    defaultAmount = attributes.money()
+
+    # Whether to make new months for it
+    enabled = attributes.boolean(default=True)
+
+
+class BudgetMonth(item.Item):
+
+    budget = attributes.bytes(allowNone=False)
+    # Eg. "2015-02"
+    month = attributes.bytes(allowNone=False)
+    amount = attributes.money(allowNone=False)
+
+
+
+class TransactionAssociationExactRule(item.Item):
+    budget = attributes.bytes(allowNone=False)
+    memo = attributes.text()
+
+class TransactionInBudget(item.Item):
+    transaction = attributes.bytes(allowNone=False)
+    budget = attributes.bytes(allowNone=False)

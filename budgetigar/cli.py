@@ -5,14 +5,20 @@ import click
 import uuid
 import hashlib
 
+from decimal import Decimal
+
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
 from axiom import item, attributes
+from axiom.attributes import AND, LikeComparison, LikeValue
 from axiom.store import Store
 
 from epsilon.extime import Time
 
 from ofxparse import OfxParser
 
-from budgetigar.items import Account, Transaction
+from budgetigar.items import Account, Transaction, Budget, BudgetMonth, TransactionInBudget, TransactionAssociationExactRule
 
 
 store = None
@@ -59,6 +65,207 @@ def dumptransactions():
     for x in transactions:
         print x
 
+@cli.group()
+def budget():
+    """
+    Budgeting commands.
+    """
+
+@budget.command(name="add")
+def budget_add():
+
+    name = click.prompt("What name should this budget have?")
+    cost = click.prompt("How much is it per month?", type=Decimal)
+    stdDate = click.prompt("When is the first instance? YYYY-MM")
+
+    startDate = Time.fromISO8601TimeAndDate(stdDate + "-01")
+
+    b = Budget(
+        store=store,
+        uuid=str(uuid.uuid4()),
+
+        name=name,
+        startDate=startDate,
+        defaultAmount=cost)
+
+
+def getDelta(o, t):
+
+
+    if t == "month":
+        return relativedelta(months=o)
+
+
+@budget.command(name="maintain")
+@click.argument("month")
+def budget_maintain(month):
+
+    if not month:
+        now = Time().asDatetime()
+        month = "{}-{:02d}".format(now.year, now.month)
+    else:
+        month = "{}-{:02d}".format(*map(int, month.encode("utf8").split("-")))
+
+    monthDatetime = Time.fromISO8601TimeAndDate(month + "-01")
+
+
+
+    budgets = store.query(Budget,
+                          AND(
+                              Budget.enabled == True,
+                              Budget.startDate <= monthDatetime
+                          ))
+
+    budgetMonths = [x.budget for x in store.query(BudgetMonth,
+                                                  BudgetMonth.month == month)]
+
+    for budget in budgets:
+
+        if budget.uuid not in budgetMonths:
+
+            BudgetMonth(store=store,
+                        budget=budget.uuid,
+                        month=month,
+                        amount=budget.defaultAmount)
+
+    click.echo("Done")
+
+
+@budget.command(name="show")
+def budget_show():
+
+
+    budgets = store.query(Budget,
+                          Budget.enabled == True)
+
+    d = relativedelta(months=1)
+
+    for i in budgets:
+
+        click.echo("{:=^39}".format(""))
+        click.echo(" {}:".format(i.name))
+
+
+        budgetMonths = list(store.query(BudgetMonth,
+                                        BudgetMonth.budget == i.uuid
+                                    ))
+
+        budgetMonths.sort(key=lambda f: f.month.split("-"))
+
+
+        click.echo("{:-^39}".format(""))
+        click.echo(" {0: <7} | {1: <7} | {2: <7} | {3: <7}".format("Month", "Budget", "Spent", "Margin"))
+        click.echo("{:-^39}".format(""))
+
+        lastMonth = 0
+
+        for month in budgetMonths:
+
+            y,m = map(int, month.month.split("-"))
+
+            windowStart = datetime(year=y, month=m, day=1)
+
+            windowtrans = store.query(Transaction,
+                                      AND(
+                                          TransactionInBudget.budget == i.uuid,
+                                          TransactionInBudget.transaction == Transaction.uuid,
+                                          Transaction.postedDate >= Time.fromDatetime(windowStart),
+                                          Transaction.postedDate < Time.fromDatetime(windowStart + d)
+                                      ))
+
+            cost = 0
+
+            for t in windowtrans:
+                cost = cost + -t.amount
+
+            margin = lastMonth + month.amount - cost
+
+            if margin >= 0:
+                fgcol = "green"
+            else:
+                fgcol = "red"
+
+            click.secho(" {: <7} | {:>7.2f} | {:>7.2f} | {:>7.2f}".format(month.month, month.amount, cost, margin), fg=fgcol)
+
+
+            lastMonth = margin
+
+
+@budget.command(name="list")
+def budget_list():
+
+    budgetItems = store.query(Budget,
+                              Budget.enabled == True)
+
+    for item in budgetItems:
+        print item
+
+@budget.command(name="associate")
+def budget_associate():
+
+    found = False
+
+    while found == False:
+
+        imp = click.prompt("Name")
+
+        searchParts = [LikeValue(u"%{}%".format(imp.encode()))]
+
+        bi = list(store.query(Budget,
+                              AND(
+                                  Budget.enabled == True,
+                                  LikeComparison(Budget.name,
+                                                 False, searchParts)
+                              )))
+
+        if len(bi) == 1:
+            found = True
+        else:
+            click.echo("NOPE")
+
+    budget = bi[0]
+
+    click.echo("Found budget {}".format(budget.name))
+
+    found = False
+
+    while found == False:
+
+        imp = click.prompt("Memo Name")
+
+        searchParts = [LikeValue(u"%{}%".format(imp.encode()))]
+
+
+        items = list(store.query(Transaction,
+                                  LikeComparison(Transaction.memo,
+                                                 False, searchParts)
+                              ))
+
+        for item in items:
+            click.echo("{} on {} for {}".format(item._memo, item.postedDate, item.amount))
+
+        if click.confirm('Does this look good?'):
+            found = True
+
+    alreadyAssociatedItems = list(x.transaction for x in store.query(TransactionInBudget,
+                                                                      TransactionInBudget.budget == budget.uuid))
+
+    with click.progressbar(items) as ix:
+
+        for item in ix:
+
+            if item.uuid not in alreadyAssociatedItems:
+
+                TransactionInBudget(
+                    store=store,
+                    transaction=item.uuid,
+                    budget=budget.uuid)
+
+    click.echo("Done!")
+
+
+
+
 @cli.command()
 def associate():
     """
@@ -87,10 +294,8 @@ def associate():
                     possibleMatchesCount += 1
 
                     match = list(possibleMatches)[0]
-
                     t.related_transaction = match.uuid
                     match.related_transaction = t.uuid
-
 
                 elif possibleMatches.count() == 0:
                     pass
@@ -98,10 +303,7 @@ def associate():
                 else:
                     assert False
 
-
     click.echo("Associated {} matches.".format(possibleMatchesCount))
-
-
 
 
 @cli.command()
