@@ -89,15 +89,42 @@ def budget_add():
         defaultAmount=cost)
 
 
-def getDelta(o, t):
+@budget.command(name="maintainall")
+def budget_maintainall():
+
+    budgets = map(lambda d: d.startDate, store.query(Budget,
+                                                     AND(
+                                                         Budget.enabled == True,
+                                                     )))
+
+    budgets.sort()
+
+    startDate = budgets[0].asDatetime()
+
+    startYear = startDate.year
+    startMonth = startDate.month
+
+    now = Time().asDatetime()
+
+    for year in range(startYear, now.year+1):
+
+        if year == startYear:
+            beginMonth = startMonth
+        else:
+            beginMonth = 1
+
+        if year == now.year:
+            endMonth = now.month+1
+        else:
+            endMonth = 13
+
+        for month in range(beginMonth, endMonth):
 
 
-    if t == "month":
-        return relativedelta(months=o)
+            budget_maintain("{}-{}".format(year, month))
 
 
-@budget.command(name="maintain")
-@click.argument("month")
+
 def budget_maintain(month):
 
     if not month:
@@ -128,12 +155,117 @@ def budget_maintain(month):
                         month=month,
                         amount=budget.defaultAmount)
 
-    click.echo("Done")
+    click.echo("Done {}".format(month))
+
+def getUnassociatedTransactions():
+
+    alltrans = store.query(Transaction,
+                           Transaction.related_transaction == None)
+    budgetTransactions = [x.transaction for x in store.query(TransactionInBudget)]
+
+    trans = [x for x in alltrans if x.uuid not in budgetTransactions]
+
+    return trans
+
+
+@budget.command(name="showunassociated")
+def budget_showunassociated():
+
+    trans = getUnassociatedTransactions()
+
+    for item in trans:
+        click.echo("{} on {} for {}".format(item._memo, item.postedDate, item.amount))
+
+    print len(trans)
+
+@budget.command(name="showmonth")
+def budget_showmonth():
+
+    budgets = store.query(Budget,
+                          Budget.enabled == True)
+
+    budgetedMonths = list(set(
+        map(lambda d: tuple(map(int, d.month.split("-"))), list(store.query(BudgetMonth)))
+    ))
+    budgetedMonths.sort()
+
+    c = " {: <7} | {: <8} | {: <8} | {: <8} | {: <8} | {: <8} | {: <8}"
+
+    click.echo("{:-^74}".format(""))
+    click.echo(c.format(" ", "Budgeted", "Budgeted", "Non-budg",  "", "Month", "Total"))
+    click.echo(c.format("Month", "Forecast", " Spent", " Spent",  "Income", "Buffer", "Buffer"))
+    click.echo("{:-^74}".format(""))
+
+    totalAmount = 0
+
+    for year, month in budgetedMonths:
+
+        d = relativedelta(months=1)
+
+        windowStart = datetime(year=year, month=month, day=1)
+
+        budgetMonths = store.query(BudgetMonth,
+                                   BudgetMonth.month == "{}-{:02d}".format(year, month))
+
+        budgetedCost = Decimal(0)
+        budgetedForecast = 0
+        totalCost = Decimal(0)
+        income = Decimal(0)
+
+        for m in budgetMonths:
+
+            windowtrans = store.query(Transaction,
+                                      AND(
+                                          TransactionInBudget.budget == m.budget,
+                                          TransactionInBudget.transaction == Transaction.uuid,
+                                          Transaction.postedDate >= Time.fromDatetime(windowStart),
+                                          Transaction.postedDate < Time.fromDatetime(windowStart + d),
+                                          Transaction.amount < 0
+                                      ))
+
+            for t in windowtrans:
+                budgetedCost += -t.amount
+
+            budgetedForecast += m.amount
+
+        # Monthly unbudgeted costs
+        monthTrans = store.query(Transaction,
+                                 AND(
+                                     Transaction.related_transaction == None,
+                                     Transaction.postedDate >= Time.fromDatetime(windowStart),
+                                     Transaction.postedDate < Time.fromDatetime(windowStart + d),
+                                     Transaction.amount < 0
+                                 ))
+
+        for t in monthTrans:
+            totalCost = totalCost + -t.amount
+
+        # Monthly income
+        monthIncome = store.query(Transaction,
+                                 AND(
+                                     Transaction.related_transaction == None,
+                                     Transaction.postedDate >= Time.fromDatetime(windowStart),
+                                     Transaction.postedDate < Time.fromDatetime(windowStart + d),
+                                     Transaction.amount > 0
+                                 ))
+
+        for t in monthIncome:
+            income += t.amount
+
+        margin = income - totalCost
+
+        if margin >= 0:
+            fgcol = "green"
+        else:
+            fgcol = "red"
+
+        totalAmount += margin
+
+        click.secho(" {: <7} | {:>8.2f} | {:>8.2f} | {:>8.2f} | {:>8.2f} | {:>8.2f} | {:>8.2f}".format("{}-{:02d}".format(year, month), budgetedForecast, budgetedCost, totalCost-budgetedCost, income, margin, totalAmount), fg=fgcol)
 
 
 @budget.command(name="show")
 def budget_show():
-
 
     budgets = store.query(Budget,
                           Budget.enabled == True)
@@ -200,6 +332,65 @@ def budget_list():
     for item in budgetItems:
         print item
 
+@budget.command(name="runrules")
+def budget_runrules():
+
+    budgets = {x.uuid:x for x in store.query(Budget, Budget.enabled == True)}
+    rules = store.query(TransactionAssociationExactRule)
+
+    for rule in rules:
+
+        if rule.budget in budgets.keys():
+
+            click.echo("Doing '{}' for {}".format(rule.memo, budgets[rule.budget].name))
+
+            searchParts = [LikeValue(u"%{}%".format(rule.memo))]
+
+            items = list(store.query(Transaction,
+                                     LikeComparison(Transaction.memo,
+                                                    False, searchParts)
+                                 ))
+
+            allowedTransactions = [x.uuid for x in getUnassociatedTransactions()]
+
+            items = [x for x in items if x.uuid in allowedTransactions]
+
+            for item in items:
+                click.echo("{} on {} for {}".format(item._memo, item.postedDate, item.amount))
+
+            if click.confirm('Does this look good?'):
+                found = True
+
+                budget = budgets[rule.budget]
+
+                with click.progressbar(items) as ix:
+
+                    for item in ix:
+
+                        TransactionInBudget(
+                            store=store,
+                            transaction=item.uuid,
+                            budget=budget.uuid)
+
+
+
+        else:
+            click.echo("Disabled budget")
+
+
+@budget.command(name="dumprules")
+def budget_dumprules():
+
+    budgets = {x.uuid:x for x in store.query(Budget, Budget.enabled == True)}
+    rules = store.query(TransactionAssociationExactRule)
+
+    for rule in rules:
+        click.echo("'{}' matches to {}".format(rule.memo, budgets[rule.budget].name))
+
+
+
+
+
 @budget.command(name="associate")
 def budget_associate():
 
@@ -233,13 +424,16 @@ def budget_associate():
 
         imp = click.prompt("Memo Name")
 
-        searchParts = [LikeValue(u"%{}%".format(imp.encode()))]
-
+        searchParts = [LikeValue(u"%{}%".format(imp))]
 
         items = list(store.query(Transaction,
                                   LikeComparison(Transaction.memo,
                                                  False, searchParts)
                               ))
+
+        allowedTransactions = [x.uuid for x in getUnassociatedTransactions()]
+
+        items = [x for x in items if x.uuid in allowedTransactions]
 
         for item in items:
             click.echo("{} on {} for {}".format(item._memo, item.postedDate, item.amount))
@@ -260,6 +454,11 @@ def budget_associate():
                     store=store,
                     transaction=item.uuid,
                     budget=budget.uuid)
+
+    if click.confirm("Do you want to add this as an exact rule?"):
+        TransactionAssociationExactRule(store=store,
+                                        budget=budget.uuid,
+                                        memo=imp)
 
     click.echo("Done!")
 
